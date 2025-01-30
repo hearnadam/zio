@@ -17,8 +17,9 @@ import java.util.concurrent.TimeUnit
 class PromiseBenchmarks {
 
   val size = 100000
-
   val ints: List[Int] = List.range(0, size)
+
+  val waiters: Int = 16
 
   @Benchmark
   def zioPromiseAwaitDone(): Unit = {
@@ -35,11 +36,40 @@ class PromiseBenchmarks {
   @Benchmark
   def catsPromiseAwaitDone(): Unit = {
 
-    val io = catsForeachDiscard(List.range(1, size)) { _ =>
+    val io = catsForeachDiscard(ints) { _ =>
       Deferred[CIO, Unit].flatMap { promise =>
         promise.complete(()).flatMap(_ => promise.get)
       }
     }
+
+    io.unsafeRunSync()
+  }
+
+  @Benchmark
+  def zioPromiseMultiAwaitDone(): Unit = {
+    def loop(n: Int, promise: Promise[Nothing, Unit]): ZIO[Any, Nothing, Boolean] = {
+      if (n <= 0) promise.succeed(())
+      else promise.await.fork *> loop(n - 1, promise)
+    }
+
+    val io = Promise.make[Nothing, Unit].flatMap { promise =>
+      loop(waiters, promise) *> promise.await
+    }
+
+    unsafeRun(io)
+  }
+
+  @Benchmark
+  def catsPromiseMultiAwaitDone(): Unit = {
+    def loop(n: Int, promise: Deferred[CIO, Unit]): CIO[Boolean] = {
+      if (n <= 0) promise.complete(())
+      else promise.get.start *> loop(n - 1, promise)
+    }
+
+    val io =
+      Deferred[CIO, Unit].flatMap { promise =>
+        loop(waiters, promise) *> promise.get
+      }
 
     io.unsafeRunSync()
   }
