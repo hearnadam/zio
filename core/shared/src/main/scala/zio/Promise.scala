@@ -48,18 +48,18 @@ final class Promise[E, A] private (blockingOn: FiberId) extends Serializable {
     ZIO.suspendSucceed {
       state.get match {
         case Done(value) => value
-        case _ =>
+        case pending =>
           ZIO.asyncInterrupt[Any, E, A](
             k => {
               @annotation.tailrec
-              def loop(): Either[UIO[Any], IO[E, A]] =
-                state.get match {
+              def loop(current: State[E, A]): Either[UIO[Any], IO[E, A]] =
+                current match {
                   case pending: Pending[?, ?] =>
                     if (state.compareAndSet(pending, pending.prepend(k))) Left(interruptJoiner(k))
-                    else loop()
+                    else loop(state.get)
                   case Done(value) => Right(value)
                 }
-              loop()
+              loop(pending)
             },
             blockingOn
           )
@@ -160,13 +160,13 @@ final class Promise[E, A] private (blockingOn: FiberId) extends Serializable {
   def succeed(a: A)(implicit trace: Trace): UIO[Boolean] =
     ZIO.succeed(unsafe.succeed(a)(trace, Unsafe.unsafe))
 
-  private def interruptJoiner(joiner: IO[E, A] => Any)(implicit trace: Trace): UIO[Any] = ZIO.succeed {
+  private def interruptJoiner(joiner: IO[E, A] => Any)(implicit trace: Trace): UIO[Any] = ZIO.suspendSucceed {
     @annotation.tailrec
-    def loop(): Unit =
+    def loop(): Exit[Nothing, Unit] =
       state.get match {
-        case _: Done[?, ?] => ()
+        case _: Done[?, ?] => Exit.unit
         case pending: Pending[?, ?] =>
-          if (state.compareAndSet(pending, pending.filter(joiner))) ()
+          if (state.compareAndSet(pending, pending.filter(joiner))) Exit.unit
           else loop()
       }
     loop()
@@ -241,19 +241,21 @@ object Promise {
   private[zio] object internal {
     sealed abstract class State[E, A] extends Serializable with Product
     sealed abstract class Pending[E, A] extends State[E, A] { self =>
+      @deprecated("Kept for binary compatibility only. Do not use", "2.1.15")
+      private[zio] def joiners: List[IO[E, A] => Any] = {
+        var result = List.empty[IO[E, A] => Any]
+        self.foreach(joiner => result = joiner :: result)
+        result.reverse
+      }
+
       def foreach(f: (IO[E, A] => Any) => Any): Unit
-      def filter(f: IO[E, A] => Any): Pending[E, A]             = Pending.Filter(f, self)
-      final def prepend(joiner: IO[E, A] => Any): Pending[E, A] = Pending.Chain(joiner, self)
-      override def equals(obj: Any): Boolean =
-        obj match {
-          case p: Pending[?, ?] => p eq self
-          case _                => false
-        }
+      def filter(f: IO[E, A] => Any): Pending[E, A]             = new Pending.Filter(f, self)
+      final def prepend(joiner: IO[E, A] => Any): Pending[E, A] = new Pending.Chain(joiner, self)
     }
     object Pending {
-      case object Empty extends Pending[Nothing, Nothing] {
+      case object Empty extends Pending[Nothing, Nothing] { self =>
         def foreach(f: (IO[Nothing, Nothing] => Any) => Any): Unit                     = ()
-        override def filter(f: IO[Nothing, Nothing] => Any): Pending[Nothing, Nothing] = this
+        override def filter(f: IO[Nothing, Nothing] => Any): Pending[Nothing, Nothing] = self
       }
 
       final case class Chain[E, A](
