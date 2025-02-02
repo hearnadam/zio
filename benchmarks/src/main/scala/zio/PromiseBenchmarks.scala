@@ -16,19 +16,16 @@ import java.util.concurrent.TimeUnit
 @Fork(value = 3)
 class PromiseBenchmarks {
 
-  val size = 100000
-  val ints: List[Int] = List.range(0, size)
-
+  val n = 100000
   val waiters: Int = 16
 
   @Benchmark
   def zioPromiseAwaitDone(): Unit = {
 
-    val io = ZIO.foreachDiscard(ints) { _ =>
+    val io =
       Promise.make[Nothing, Unit].flatMap { promise =>
         promise.succeed(()) *> promise.await
-      }
-    }
+      }.repeatN(n)
 
     unsafeRun(io)
   }
@@ -36,11 +33,10 @@ class PromiseBenchmarks {
   @Benchmark
   def catsPromiseAwaitDone(): Unit = {
 
-    val io = catsForeachDiscard(ints) { _ =>
+    val io =
       Deferred[CIO, Unit].flatMap { promise =>
         promise.complete(()).flatMap(_ => promise.get)
-      }
-    }
+      }.replicateA_(waiters)
 
     io.unsafeRunSync()
   }

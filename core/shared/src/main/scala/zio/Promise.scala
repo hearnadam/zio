@@ -239,46 +239,46 @@ object Promise {
   private val ConstFalse: () => Boolean = () => false
 
   private[zio] object internal {
-    sealed abstract class State[E, A] extends Serializable with Product
+    import Pending._
+    sealed abstract class State[E, A]
     sealed abstract class Pending[E, A] extends State[E, A] { self =>
-      @deprecated("Kept for binary compatibility only. Do not use", "2.1.15")
-      private[zio] def joiners: List[IO[E, A] => Any] = {
-        var result = List.empty[IO[E, A] => Any]
-        self.foreach(joiner => result = joiner :: result)
-        result.reverse
+      def foreach(f: (IO[E, A] => Any) => Any): Unit = {
+        @annotation.tailrec
+        def loop(current: Pending[E, A], filter: (IO[E, A] => Any) => Boolean): Unit = 
+          if (current ne Empty) {
+            current match {
+              case c: Chain[?, ?] =>
+                if (!filter(c.head)) f(c.head)
+                loop(c.tail, filter)
+              case f: Filter[?, ?] =>
+                loop(f.pending, joiner => (joiner eq f.filtered) || filter(joiner))
+              case _: Empty.type => ()
+            }
+          }
+        loop(this, _ => false)
       }
-
-      def foreach(f: (IO[E, A] => Any) => Any): Unit
-      def filter(f: IO[E, A] => Any): Pending[E, A]             = new Pending.Filter(f, self)
-      final def prepend(joiner: IO[E, A] => Any): Pending[E, A] = new Pending.Chain(joiner, self)
+      def filter(f: IO[E, A] => Any): Pending[E, A] = new Filter(f, self)
+      final def prepend(joiner: IO[E, A] => Any): Pending[E, A] = new Chain(joiner, self)
     }
     object Pending {
       case object Empty extends Pending[Nothing, Nothing] { self =>
-        def foreach(f: (IO[Nothing, Nothing] => Any) => Any): Unit                     = ()
+        override def foreach(f: (IO[Nothing, Nothing] => Any) => Any): Unit = ()
         override def filter(f: IO[Nothing, Nothing] => Any): Pending[Nothing, Nothing] = self
       }
 
       final case class Chain[E, A](
-        head: IO[E, A] => Any,
-        tail: Pending[E, A]
-      ) extends Pending[E, A] {
-        def foreach(f: (IO[E, A] => Any) => Any): Unit = {
-          f(head)
-          tail.foreach(f)
-        }
-      }
+        val head: IO[E, A] => Any,
+        val tail: Pending[E, A]
+      ) extends Pending[E, A]
 
-      final case class Filter[E, A](
-        filtered: IO[E, A] => Any,
-        pending: Pending[E, A]
-      ) extends Pending[E, A] {
-        def foreach(f: (IO[E, A] => Any) => Any): Unit =
-          pending.foreach(joiner => if (filtered ne joiner) f(joiner))
-      }
+      final class Filter[E, A](
+        val filtered: IO[E, A] => Any,
+        val pending: Pending[E, A]
+      ) extends Pending[E, A]
     }
 
     final case class Done[E, A](value: IO[E, A]) extends State[E, A]
-    def empty[E, A]: State[E, A] = Pending.Empty.asInstanceOf[State[E, A]]
+    def empty[E, A]: State[E, A] = Empty.asInstanceOf[State[E, A]]
   }
 
   /**
