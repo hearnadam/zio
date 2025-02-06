@@ -18,6 +18,7 @@ package zio
 
 import zio.Promise.internal._
 import zio.stacktracer.TracingImplicits.disableAutoTrace
+import scala.collection.immutable.LongMap
 
 import java.util.concurrent.atomic.AtomicReference
 
@@ -55,7 +56,7 @@ final class Promise[E, A] private (blockingOn: FiberId) extends Serializable {
               def loop(current: State[E, A]): Either[UIO[Any], IO[E, A]] =
                 current match {
                   case pending: Pending[?, ?] =>
-                    if (state.compareAndSet(pending, pending.prepend(k))) Left(interruptJoiner(k))
+                    if (state.compareAndSet(pending, pending.add(k))) Left(interruptJoiner(pending.next))
                     else loop(state.get)
                   case Done(value) => Right(value)
                 }
@@ -160,15 +161,15 @@ final class Promise[E, A] private (blockingOn: FiberId) extends Serializable {
   def succeed(a: A)(implicit trace: Trace): UIO[Boolean] =
     ZIO.succeed(unsafe.succeed(a)(trace, Unsafe.unsafe))
 
-  private def interruptJoiner(joiner: IO[E, A] => Any)(implicit trace: Trace): UIO[Any] = ZIO.suspendSucceed {
+  private def interruptJoiner(id: Long)(implicit trace: Trace): UIO[Any] = ZIO.suspendSucceed {
     @annotation.tailrec
     def loop(): Exit[Nothing, Unit] =
       state.get match {
-        case _: Done[?, ?] => Exit.unit
         case pending: Pending[?, ?] =>
-          if (state.compareAndSet(pending, pending.filter(joiner))) Exit.unit
+          if (state.compareAndSet(pending, pending.remove(id))) Exit.unit
           else loop()
-      }
+        case _: Done[?, ?] => Exit.unit
+        }
     loop()
   }
 
@@ -188,19 +189,20 @@ final class Promise[E, A] private (blockingOn: FiberId) extends Serializable {
   @deprecated("Kept for binary compatibility only. Do not use", "2.1.15")
   private[zio] def state: AtomicReference[Promise.internal.State[E, A]] =
     unsafe.asInstanceOf[AtomicReference[Promise.internal.State[E, A]]]
-  private[zio] val unsafe: UnsafeAPI = new AtomicReference(Promise.internal.empty[E, A]) with UnsafeAPI { state =>
+  private[zio] val unsafe: UnsafeAPI = new AtomicReference(Promise.internal.State.empty[E, A]) with UnsafeAPI { state =>
     def completeWith(io: IO[E, A])(implicit unsafe: Unsafe): Boolean = {
       @annotation.tailrec
       def loop(): Boolean =
         state.get match {
-          case _: Done[?, ?] => false
           case pending: Pending[?, ?] =>
             if (state.compareAndSet(pending, Done(io))) {
-              pending.foreach(_(io))
+              pending.complete(io)
               true
-            } else
+            } else {
               loop()
-        }
+            }
+          case _: Done[?, ?] => false
+      }
       loop()
     }
 
@@ -224,7 +226,7 @@ final class Promise[E, A] private (blockingOn: FiberId) extends Serializable {
     def poll(implicit unsafe: Unsafe): Option[IO[E, A]] =
       state.get() match {
         case _: Pending[?, ?] => None
-        case Done(io)         => Some(io)
+        case Done(value)      => Some(value)
       }
 
     def refailCause(e: Cause[E])(implicit trace: Trace, unsafe: Unsafe): Boolean =
@@ -239,46 +241,17 @@ object Promise {
   private val ConstFalse: () => Boolean = () => false
 
   private[zio] object internal {
-    import Pending._
     sealed abstract class State[E, A]
-    sealed abstract class Pending[E, A] extends State[E, A] { self =>
-      def foreach(f: (IO[E, A] => Any) => Any): Unit = {
-        @annotation.tailrec
-        def loop(current: Pending[E, A], filter: (IO[E, A] => Any) => Boolean): Unit = 
-          if (current ne Empty) {
-            current match {
-              case c: Chain[?, ?] =>
-                if (!filter(c.head)) f(c.head)
-                loop(c.tail, filter)
-              case f: Filter[?, ?] =>
-                loop(f.pending, joiner => (joiner eq f.filtered) || filter(joiner))
-              case _: Empty.type => ()
-            }
-          }
-        loop(this, _ => false)
-      }
-      def filter(f: IO[E, A] => Any): Pending[E, A] = new Filter(f, self)
-      final def prepend(joiner: IO[E, A] => Any): Pending[E, A] = new Chain(joiner, self)
+    final case class Done[E, A](val value: IO[E, A]) extends State[E, A]
+    final class Pending[E, A](val next: Long, joiners: LongMap[IO[E, A] => Any]) extends State[E, A] {
+      def complete(io: IO[E, A]): Unit = joiners.valuesIterator.foreach(_(io))
+      def add(joiner: IO[E, A] => Any): Pending[E, A] = new Pending(next + 1, joiners.updated(next, joiner))
+      def remove(id: Long): Pending[E, A] = new Pending(next, joiners - id)
     }
-    object Pending {
-      case object Empty extends Pending[Nothing, Nothing] { self =>
-        override def foreach(f: (IO[Nothing, Nothing] => Any) => Any): Unit = ()
-        override def filter(f: IO[Nothing, Nothing] => Any): Pending[Nothing, Nothing] = self
-      }
-
-      final case class Chain[E, A](
-        val head: IO[E, A] => Any,
-        val tail: Pending[E, A]
-      ) extends Pending[E, A]
-
-      final class Filter[E, A](
-        val filtered: IO[E, A] => Any,
-        val pending: Pending[E, A]
-      ) extends Pending[E, A]
+    val Empty = new Pending[Nothing, Nothing](0, LongMap.empty)
+    object State {
+      def empty[E, A]: State[E, A] = Empty.asInstanceOf[State[E, A]]
     }
-
-    final case class Done[E, A](value: IO[E, A]) extends State[E, A]
-    def empty[E, A]: State[E, A] = Empty.asInstanceOf[State[E, A]]
   }
 
   /**

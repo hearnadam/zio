@@ -1,8 +1,11 @@
 package zio
 
 import cats.effect.kernel.Deferred
+import cats.syntax.traverse._
+import cats.instances.list._
 import cats.effect.unsafe.implicits.global
 import cats.effect.{IO => CIO}
+import cats.syntax.foldable._
 import org.openjdk.jmh.annotations.{Scope => JScope, _}
 import zio.BenchmarkUtil._
 
@@ -36,36 +39,40 @@ class PromiseBenchmarks {
     val io =
       Deferred[CIO, Unit].flatMap { promise =>
         promise.complete(()).flatMap(_ => promise.get)
-      }.replicateA_(waiters)
+      }.replicateA_(n)
 
     io.unsafeRunSync()
   }
 
   @Benchmark
   def zioPromiseMultiAwaitDone(): Unit = {
-    def loop(n: Int, promise: Promise[Nothing, Unit]): ZIO[Any, Nothing, Boolean] = {
-      if (n <= 0) promise.succeed(())
-      else promise.await.fork *> loop(n - 1, promise)
-    }
+    def createWaiters(promise: Promise[Nothing, Unit]): ZIO[Any, Nothing, Seq[Fiber[Nothing, Unit]]] =
+      ZIO.foreach(Range(0, waiters))(_ => promise.await.forkDaemon)
 
     val io = Promise.make[Nothing, Unit].flatMap { promise =>
-      loop(waiters, promise) *> promise.await
-    }
+      for {
+        fibers <- createWaiters(promise)
+        _      <- promise.succeed(())
+        _      <- ZIO.foreach(fibers)(_.join)
+      } yield ()
+    }.repeatN(1023)
 
     unsafeRun(io)
   }
 
   @Benchmark
   def catsPromiseMultiAwaitDone(): Unit = {
-    def loop(n: Int, promise: Deferred[CIO, Unit]): CIO[Boolean] = {
-      if (n <= 0) promise.complete(())
-      else promise.get.start *> loop(n - 1, promise)
-    }
+    def createWaiters(promise: Deferred[CIO, Unit]): CIO[List[cats.effect.Fiber[CIO, Throwable, Unit]]] =
+      List.range(0, waiters).traverse(_ => promise.get.start)
 
     val io =
       Deferred[CIO, Unit].flatMap { promise =>
-        loop(waiters, promise) *> promise.get
-      }
+        for {
+          fibers <- createWaiters(promise)
+          _      <- promise.complete(())
+          _      <- fibers.traverse_(_.join)
+        } yield ()
+      }.replicateA_(1023)
 
     io.unsafeRunSync()
   }
