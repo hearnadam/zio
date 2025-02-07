@@ -50,15 +50,15 @@ final class Promise[E, A] private (blockingOn: FiberId) extends Serializable {
       state.get match {
         case Done(value) => value
         case pending =>
-          ZIO.asyncInterrupt[Any, E, A](
+          ZIO.async[Any, E, A]( // intentionally never remove the callback, interrupted fibers won't be resumed
             k => {
               @annotation.tailrec
-              def loop(current: State[E, A]): Either[UIO[Any], IO[E, A]] =
+              def loop(current: State[E, A]): Unit =
                 current match {
                   case pending: Pending[?, ?] =>
-                    if (state.compareAndSet(pending, pending.add(k))) Left(interruptJoiner(pending.next))
+                    if (state.compareAndSet(pending, pending.add(k))) ()
                     else loop(state.get)
-                  case Done(value) => Right(value)
+                  case Done(value) => k(value)
                 }
               loop(pending)
             },
@@ -161,18 +161,6 @@ final class Promise[E, A] private (blockingOn: FiberId) extends Serializable {
   def succeed(a: A)(implicit trace: Trace): UIO[Boolean] =
     ZIO.succeed(unsafe.succeed(a)(trace, Unsafe.unsafe))
 
-  private def interruptJoiner(id: Long)(implicit trace: Trace): UIO[Any] = ZIO.suspendSucceed {
-    @annotation.tailrec
-    def loop(): Exit[Nothing, Unit] =
-      state.get match {
-        case pending: Pending[?, ?] =>
-          if (state.compareAndSet(pending, pending.remove(id))) Exit.unit
-          else loop()
-        case _: Done[?, ?] => Exit.unit
-        }
-    loop()
-  }
-
   private[zio] trait UnsafeAPI extends Serializable {
     def completeWith(io: IO[E, A])(implicit unsafe: Unsafe): Boolean
     def die(e: Throwable)(implicit trace: Trace, unsafe: Unsafe): Boolean
@@ -202,7 +190,7 @@ final class Promise[E, A] private (blockingOn: FiberId) extends Serializable {
               loop()
             }
           case _: Done[?, ?] => false
-      }
+        }
       loop()
     }
 
@@ -243,12 +231,21 @@ object Promise {
   private[zio] object internal {
     sealed abstract class State[E, A]
     final case class Done[E, A](val value: IO[E, A]) extends State[E, A]
-    final class Pending[E, A](val next: Long, joiners: LongMap[IO[E, A] => Any]) extends State[E, A] {
-      def complete(io: IO[E, A]): Unit = joiners.valuesIterator.foreach(_(io))
-      def add(joiner: IO[E, A] => Any): Pending[E, A] = new Pending(next + 1, joiners.updated(next, joiner))
-      def remove(id: Long): Pending[E, A] = new Pending(next, joiners - id)
+    sealed abstract class Pending[E, A] extends State[E, A] { self =>
+      @annotation.tailrec
+      final def complete(io: IO[E, A]): Unit =
+        self match {
+          case Chain(j, js) =>
+            j(io)
+            js.complete(io)
+          case _: Empty.type => ()
+        }
+      def add(joiner: IO[E, A] => Any): Pending[E, A] = new Chain(joiner, self)
     }
-    val Empty = new Pending[Nothing, Nothing](0, LongMap.empty)
+
+    final case class Chain[E, A](j: IO[E, A] => Any, js: Pending[E, A]) extends Pending[E, A]
+    case object Empty                                                   extends Pending[Nothing, Nothing]
+
     object State {
       def empty[E, A]: State[E, A] = Empty.asInstanceOf[State[E, A]]
     }

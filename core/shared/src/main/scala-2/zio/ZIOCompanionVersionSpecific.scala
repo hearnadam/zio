@@ -46,12 +46,11 @@ private[zio] trait ZIOCompanionVersionSpecific {
   )(implicit trace: Trace): ZIO[R, E, A] =
     ZIO.suspendSucceed {
       val state = new AtomicReference[URIO[R, Any]](Exit.unit) with ((ZIO[R, E, A] => Unit) => ZIO[R, E, A]) {
-        def apply(k: ZIO[R, E, A] => Unit): ZIO[R, E, A] = {
+        def apply(k: ZIO[R, E, A] => Unit): ZIO[R, E, A] =
           register(k(_)) match {
             case Left(canceler) => set(canceler); null.asInstanceOf[ZIO[R, E, A]]
             case Right(done)    => done
           }
-        }
       }
 
       ZIO.Async[R, E, A](trace, state, () => blockingOn).onInterrupt(state.get())

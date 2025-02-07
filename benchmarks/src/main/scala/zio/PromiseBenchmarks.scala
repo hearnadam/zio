@@ -19,16 +19,19 @@ import java.util.concurrent.TimeUnit
 @Fork(value = 3)
 class PromiseBenchmarks {
 
-  val n = 100000
+  val n            = 100000
   val waiters: Int = 16
 
   @Benchmark
   def zioPromiseAwaitDone(): Unit = {
 
     val io =
-      Promise.make[Nothing, Unit].flatMap { promise =>
-        promise.succeed(()) *> promise.await
-      }.repeatN(n)
+      Promise
+        .make[Nothing, Unit]
+        .flatMap { promise =>
+          promise.succeed(()) *> promise.await
+        }
+        .repeatN(n)
 
     unsafeRun(io)
   }
@@ -49,13 +52,16 @@ class PromiseBenchmarks {
     def createWaiters(promise: Promise[Nothing, Unit]): ZIO[Any, Nothing, Seq[Fiber[Nothing, Unit]]] =
       ZIO.foreach(Range(0, waiters))(_ => promise.await.forkDaemon)
 
-    val io = Promise.make[Nothing, Unit].flatMap { promise =>
-      for {
-        fibers <- createWaiters(promise)
-        _      <- promise.done(Exit.unit)
-        _      <- ZIO.foreachDiscard(fibers)(_.join)
-      } yield ()
-    }.repeatN(1023)
+    val io = Promise
+      .make[Nothing, Unit]
+      .flatMap { promise =>
+        for {
+          fibers <- createWaiters(promise)
+          _      <- promise.done(Exit.unit)
+          _      <- ZIO.foreachDiscard(fibers)(_.join)
+        } yield ()
+      }
+      .repeatN(1023)
 
     unsafeRun(io)
   }

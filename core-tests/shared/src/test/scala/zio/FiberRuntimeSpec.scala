@@ -73,13 +73,13 @@ object FiberRuntimeSpec extends ZIOBaseSpec {
             } *> ZIO.never)
 
           for {
-            fiber <- effect.fork
-            _     <- fiber.interrupt
-            callback     <- cb.get.some
-            _     <- ZIO.succeed(callback(ZIO.unit))
-            first     <- fiber.poll
-            _ <- ZIO.succeed(callback(ZIO.unit))
-            second    <- fiber.poll
+            fiber    <- effect.fork
+            _        <- fiber.interrupt
+            callback <- cb.get.some
+            _        <- ZIO.succeed(callback(ZIO.unit))
+            first    <- fiber.poll
+            _        <- ZIO.succeed(callback(ZIO.unit))
+            second   <- fiber.poll
           } yield assertTrue(first == second) && assertTrue(first == None)
         }
       }

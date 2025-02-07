@@ -43,8 +43,8 @@ object BenchmarkUtil extends Runtime[Any] { self =>
 
   private object NoFiberRootsRuntime extends Runtime[Any] {
     override val unsafe = super.unsafe
-    val environment  = Runtime.default.environment
-    val fiberRefs    = Runtime.default.fiberRefs
-    val runtimeFlags = RuntimeFlags(RuntimeFlag.CooperativeYielding, RuntimeFlag.Interruption)
+    val environment     = Runtime.default.environment
+    val fiberRefs       = Runtime.default.fiberRefs
+    val runtimeFlags    = RuntimeFlags(RuntimeFlag.CooperativeYielding, RuntimeFlag.Interruption)
   }
 }
