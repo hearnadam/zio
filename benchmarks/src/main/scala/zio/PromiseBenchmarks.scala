@@ -52,8 +52,8 @@ class PromiseBenchmarks {
     val io = Promise.make[Nothing, Unit].flatMap { promise =>
       for {
         fibers <- createWaiters(promise)
-        _      <- promise.succeed(())
-        _      <- ZIO.foreach(fibers)(_.join)
+        _      <- promise.done(Exit.unit)
+        _      <- ZIO.foreachDiscard(fibers)(_.join)
       } yield ()
     }.repeatN(1023)
 
