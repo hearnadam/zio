@@ -202,7 +202,7 @@ final class Promise[E, A] private (blockingOn: FiberId) extends Serializable {
     def succeedUnit(implicit ev0: A =:= Unit, trace: Trace, unsafe: Unsafe): Boolean
   }
 
-  @deprecated("Kept for binary compatibility only. Do not use", "2.1.15")
+  @deprecated("Kept for binary compatibility only. Do not use", "2.1.16")
   private[zio] def state: AtomicReference[Promise.internal.State[E, A]] =
     unsafe.asInstanceOf[AtomicReference[Promise.internal.State[E, A]]]
   private[zio] val unsafe: UnsafeAPI = new AtomicReference(Promise.internal.State.empty[E, A]) with UnsafeAPI { state =>
@@ -217,7 +217,7 @@ final class Promise[E, A] private (blockingOn: FiberId) extends Serializable {
             } else {
               loop()
             }
-          case _: Done[?, ?] => false
+          case _ => false
         }
       loop()
     }
@@ -241,8 +241,8 @@ final class Promise[E, A] private (blockingOn: FiberId) extends Serializable {
 
     def poll(implicit unsafe: Unsafe): Option[IO[E, A]] =
       state.get() match {
-        case _: Pending[?, ?] => None
-        case Done(value)      => Some(value)
+        case Done(value) => Some(value)
+        case _           => None
       }
 
     def refailCause(e: Cause[E])(implicit trace: Trace, unsafe: Unsafe): Boolean =
@@ -251,8 +251,8 @@ final class Promise[E, A] private (blockingOn: FiberId) extends Serializable {
     def succeed(a: A)(implicit trace: Trace, unsafe: Unsafe): Boolean =
       completeWith(Exit.succeed(a))
 
-      override def succeedUnit(implicit ev0: A =:= Unit, trace: Trace, unsafe: Unsafe): Boolean =
-        completeWith(Exit.unit.asInstanceOf[IO[E, A]])
+    override def succeedUnit(implicit ev0: A =:= Unit, trace: Trace, unsafe: Unsafe): Boolean =
+      completeWith(Exit.unit.asInstanceOf[IO[E, A]])
   }
 
 }
@@ -269,7 +269,7 @@ object Promise {
           case Chain(j, js) =>
             j(io)
             js.complete(io)
-          case _: Empty.type => ()
+          case _ => ()
         }
       def add(joiner: IO[E, A] => Any): Pending[E, A] = new Chain(joiner, self)
     }
