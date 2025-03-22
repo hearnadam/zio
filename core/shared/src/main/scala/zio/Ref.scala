@@ -322,7 +322,7 @@ object Ref extends Serializable {
 
   @deprecated("Kept for binary compatibility only. Do not use", "2.1.15")
   private[zio] object Atomic {}
-  private[zio] final class Atomic[A](initial: A) extends Ref[A] { self =>
+  private[zio] final class Atomic[A](private[this] val initial: A) extends Ref[A] { self =>
     override def get(implicit trace: Trace): UIO[A] =
       ZIO.succeed(unsafe.get(Unsafe))
 
