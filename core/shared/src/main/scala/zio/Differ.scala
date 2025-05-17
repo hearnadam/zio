@@ -122,13 +122,14 @@ trait Differ[Value, Patch] extends Serializable { self =>
 }
 
 object Differ {
+  sealed abstract class Base[Value, Patch] extends Differ[Value, Patch]
 
   /**
    * Constructs a differ that knows how to diff a `Chunk` of values given a
    * differ that knows how to diff the values.
    */
   def chunk[Value, Patch](differ: Differ[Value, Patch]): Differ[Chunk[Value], ChunkPatch[Value, Patch]] =
-    new Differ[Chunk[Value], ChunkPatch[Value, Patch]] {
+    new Base[Chunk[Value], ChunkPatch[Value, Patch]] {
       def combine(first: ChunkPatch[Value, Patch], second: ChunkPatch[Value, Patch]): ChunkPatch[Value, Patch] =
         first.combine(second)
       def diff(oldValue: Chunk[Value], newValue: Chunk[Value]): ChunkPatch[Value, Patch] =
@@ -143,7 +144,7 @@ object Differ {
    * Constructs a differ that knows how to diff `ZEnvironment` values.
    */
   def environment[A]: Differ[ZEnvironment[A], ZEnvironment.Patch[A, A]] =
-    new Differ[ZEnvironment[A], ZEnvironment.Patch[A, A]] {
+    new Base[ZEnvironment[A], ZEnvironment.Patch[A, A]] {
       def combine(first: ZEnvironment.Patch[A, A], second: ZEnvironment.Patch[A, A]): ZEnvironment.Patch[A, A] =
         first.combine(second)
       def diff(oldValue: ZEnvironment[A], newValue: ZEnvironment[A]): ZEnvironment.Patch[A, A] =
@@ -158,7 +159,7 @@ object Differ {
    * Constructs a differ that knows how to diff `IsFatal` values.
    */
   def isFatal: Differ[IsFatal, IsFatal.Patch] =
-    new Differ[IsFatal, IsFatal.Patch] {
+    new Base[IsFatal, IsFatal.Patch] {
       def combine(first: IsFatal.Patch, second: IsFatal.Patch): IsFatal.Patch =
         first.combine(second)
       def diff(oldValue: IsFatal, newValue: IsFatal): IsFatal.Patch =
@@ -174,7 +175,7 @@ object Differ {
    * a differ that knows how to diff the values.
    */
   def map[Key, Value, Patch](differ: Differ[Value, Patch]): Differ[Map[Key, Value], MapPatch[Key, Value, Patch]] =
-    new Differ[Map[Key, Value], MapPatch[Key, Value, Patch]] {
+    new Base[Map[Key, Value], MapPatch[Key, Value, Patch]] {
       def combine(
         first: MapPatch[Key, Value, Patch],
         second: MapPatch[Key, Value, Patch]
@@ -192,7 +193,7 @@ object Differ {
    * Constructs a differ that knows how to diff `RuntimeFlags` values.
    */
   val runtimeFlags: Differ[RuntimeFlags, RuntimeFlags.Patch] =
-    new Differ[RuntimeFlags, RuntimeFlags.Patch] {
+    new Base[RuntimeFlags, RuntimeFlags.Patch] {
       def combine(first: RuntimeFlags.Patch, second: RuntimeFlags.Patch): RuntimeFlags.Patch =
         RuntimeFlags.Patch.andThen(first, second)
       def diff(oldValue: RuntimeFlags, newValue: RuntimeFlags): RuntimeFlags.Patch =
@@ -207,7 +208,7 @@ object Differ {
    * Constructs a differ that knows how to diff a `Set` of values.
    */
   def set[A]: Differ[Set[A], SetPatch[A]] =
-    new Differ[Set[A], SetPatch[A]] {
+    new Base[Set[A], SetPatch[A]] {
       def combine(first: SetPatch[A], second: SetPatch[A]): SetPatch[A] =
         first combine second
       def diff(oldValue: Set[A], newValue: Set[A]): SetPatch[A] =
@@ -222,7 +223,7 @@ object Differ {
    * Constructs a differ that knows how to diff `Supervisor` values.
    */
   def supervisor: Differ[Supervisor[Any], Supervisor.Patch] =
-    new Differ[Supervisor[Any], Supervisor.Patch] {
+    new Base[Supervisor[Any], Supervisor.Patch] {
       def combine(first: Supervisor.Patch, second: Supervisor.Patch): Supervisor.Patch =
         first.combine(second)
       def diff(oldValue: Supervisor[Any], newValue: Supervisor[Any]): Supervisor.Patch =
@@ -240,17 +241,20 @@ object Differ {
    * there is no compositional way to update them.
    */
   def update[A]: Differ[A, A => A] =
-    new Differ[A, A => A] {
-      def combine(first: A => A, second: A => A): A => A =
-        if (first == empty) second
-        else if (second == empty) first
-        else first.andThen(second)
-      def diff(oldValue: A, newValue: A): A => A =
-        if (oldValue == newValue) empty else Function.const(newValue)
-      def empty: A => A =
-        ZIO.identityFn
-      def patch(patch: A => A)(oldValue: A): A =
-        patch(oldValue)
+    UpdateDiffer.asInstanceOf[Differ[A, A => A]]
+
+  private object UpdateDiffer extends Base[Any, Any => Any] {
+    def combine(first: Any => Any, second: Any => Any): Any => Any =
+      if (first == empty) second
+      else if (second == empty) first
+      else first.andThen(second)
+    def diff(oldValue: Any, newValue: Any): Any => Any =
+      if (oldValue == newValue) empty
+      else Function.const(newValue)
+    def empty: Any => Any =
+      ZIO.identityFn
+    def patch(patch: Any => Any)(oldValue: Any): Any =
+      patch(oldValue)
     }
 
   /**
