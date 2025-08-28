@@ -143,7 +143,14 @@ object ZPipelineSpec extends ZIOBaseSpec {
           assertZIO(
             ZStream("abc<", ">abc").via(ZPipeline.splitOn("<>")).runCollect
           )(equalTo(Chunk("abc", "abc")))
-        }
+        },
+        test("does not merge adjacent strings without delimiter (issue #10050)") {
+          assertZIO(
+            ZStream("1-2-3", "4-5", "6", "7-8-9-10")
+              .via(ZPipeline.splitOn("-"))
+              .runCollect
+          )(equalTo(Chunk("1", "2", "3", "4", "5", "6", "7", "8", "9", "10")))
+        } @@ TestAspect.failing,
       ),
       suite("take")(
         test("it takes the correct number of elements") {
